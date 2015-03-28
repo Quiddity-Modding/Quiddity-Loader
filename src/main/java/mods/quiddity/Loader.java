@@ -2,6 +2,7 @@ package mods.quiddity;
 
 import com.google.common.collect.ImmutableMap;
 import javassist.*;
+import mods.quiddity.world.WorldServerProxy;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.SystemUtils;
@@ -20,9 +21,6 @@ import java.util.zip.ZipFile;
 public class Loader {
 
     private final boolean isDedicatedServer, hasInternalServer;
-
-    // TODO: The main server class was always this right?
-    private static final String serverClassName = "net.minecraft.server.MinecraftServer";
 
     private static Loader instance = null;
     private static String minecraftFile;
@@ -133,13 +131,17 @@ public class Loader {
     public void doLoading() {
         if (!isDedicatedServer) {
             if (!ClientInstance.doTransform()) {
-                throw new AssertionError("Unable to transform the client. This is fatal.");
+                throw new AssertionError("Unable to transform the Client. This is fatal.");
             }
         }
         if (isDedicatedServer || hasInternalServer) {
-            if (!ServerHandler.doTransform(serverClassName)) {
+            if (!ServerHandler.doTransform()) {
                 throw new AssertionError("Unable to transform the " +
-                        (isDedicatedServer ? "server" : "internal server") + ". This is fatal.");
+                        (isDedicatedServer ? "Server" : "Internal Server") + ". This is fatal.");
+            }
+
+            if (!WorldServerProxy.doTransform()) {
+                throw new AssertionError("Unable to transform the World Server. This is fatal.");
             }
         }
     }

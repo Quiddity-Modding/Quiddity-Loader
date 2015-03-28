@@ -25,12 +25,12 @@ public class ServerHandler {
     /**
      * Classes
      */
-    private static Class<?> minecraftServerClass;
+    private static Class<?> minecraftServerClass = null;
 
-    private static String serverClassName = StringUtils.EMPTY;
+    // TODO: The main server class was always this right?
+    private static final String serverClassName = "net.minecraft.server.MinecraftServer";
 
-    public static boolean doTransform(String className) {
-        serverClassName = className;
+    public static boolean doTransform() {
         CtClass serverClass = Loader.getInstance().getPool().getOrNull(serverClassName);
         try {
             if (serverClass.getDeclaredMethod("run") != null) {
@@ -80,5 +80,9 @@ public class ServerHandler {
 
     public static void startDedicatedServer() {
 
+    }
+
+    public static String getMinecraftServerClassName() {
+        return serverClassName;
     }
 }
