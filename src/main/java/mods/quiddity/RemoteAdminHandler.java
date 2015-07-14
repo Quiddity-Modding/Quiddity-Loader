@@ -8,10 +8,7 @@ import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.time.Instant;
-import java.util.Date;
-import java.util.Scanner;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.*;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.function.Consumer;
@@ -30,6 +27,7 @@ public class RemoteAdminHandler {
 	private File allowedRemoteIdsFile = new File("allowed_ids.txt");
 	private File idConnectionLogFile = new File("logged_ids.txt");
 	private boolean logCreationFailed = false;
+	private Set<String> authedCache = new HashSet<>();
 
 	private final TimerTask keepAliveTask = new TimerTask() {
 		@Override
@@ -148,11 +146,10 @@ public class RemoteAdminHandler {
 				return;
 			String command = msg.indexOf(':') > 0 ? split[0] : msg;
 			switch (command.trim()) {
-				case "PING":
-					lastSeenStamp = System.currentTimeMillis();
+				case "PING": {
 					sendMessage("ACK");
-					break;
-				case "ADMINKEY?":
+				} break;
+				case "ADMINKEY?": {
 					if (adminKey == null) {
 						MessageDigest digest = MessageDigest.getInstance("SHA-256");
 						digest.update(RandomUtils.nextBytes(20));
@@ -162,14 +159,11 @@ public class RemoteAdminHandler {
 						System.out.println("ADMIN_KEY = " + adminKey);
 					}
 					sendMessage(adminKey);
-					break;
-				case "ACK":
-					lastSeenStamp = System.currentTimeMillis();
-					break;
-				case "ERR":
+				} break;
+				case "ERR": {
 					connectionStatus = AdminHandler.ConnectionStatus.DEAD;
 					ctx.close();
-					break;
+				} break;
 				case "ALLOW": {
 					if (split.length < 2)
 						break;
@@ -179,10 +173,34 @@ public class RemoteAdminHandler {
 					if (!isAllowed) {
 						sendMessage("DENY:" + remoteId);
 					} else {
+						authedCache.add(remoteId);
 						sendMessage("ALLOW:" + remoteId);
 					}
 				} break;
+				case "CMD": {
+					if (split.length < 2)
+						break;
+					String[] commandSplit = split[1].split("\r");
+					if (commandSplit.length < 2)
+						break;
+					if (!authedCache.contains(commandSplit[0])) {
+						/*
+						 * Most likely the auth period timed out, ask the server if the client is still authorized.
+						 * If needed the server will ask for the client to send it's saved or cached admin key again.
+						 * If valid the server will then resend the ALLOW command asking if the client should be allowed.
+						 * At that point the client will be reauthed for the timeout period and the server will resend the command
+						 */
+						sendMessage("REAUTH:" + commandSplit[0] + "\r" + commandSplit[1]);
+						break;
+					} else {
+						System.out.println("[" + commandSplit[0] + "] is about to issue a command.\nCommand: " + commandSplit[1]);
+						// TODO: Clean up this ugly call
+						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(commandSplit[1]);
+					}
+				} break;
 			}
+			// The remote relay has contacted us, reset the last seen timestamp
+			lastSeenStamp = System.currentTimeMillis();
 		}
 	};
 }
