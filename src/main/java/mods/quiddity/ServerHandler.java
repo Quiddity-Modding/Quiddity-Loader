@@ -4,6 +4,8 @@ import javassist.*;
 import javassist.bytecode.*;
 import org.apache.commons.lang3.StringUtils;
 
+import java.lang.reflect.InvocationTargetException;
+
 public class ServerHandler {
 
     private final Object minecraftServerObject;
@@ -15,7 +17,7 @@ public class ServerHandler {
 
     @SuppressWarnings("unused") // Suppress unused warning, it get used in injected code
     public void onTick() {
-        System.out.println("Server running!");
+        //System.out.println("Server running!");
     }
 
     /**
@@ -54,9 +56,9 @@ public class ServerHandler {
                         serverClass.addField(CtField.make("private mods.quiddity.ServerHandler quiddityServerHandler = null;", serverClass));
                         int invokeLine = ((LineNumberAttribute)ca.getAttribute(LineNumberAttribute.tag)).toLineNumber(address);
                         runMethod.insertAt(invokeLine,
-                                "if (quiddityServerHandler == null) {" +
+                                    "if (quiddityServerHandler == null) {" +
                                         "quiddityServerHandler = new mods.quiddity.ServerHandler($0);" +
-                                        "} quiddityServerHandler.onTick();");
+	                                "} quiddityServerHandler.onTick();");
                         return true;
                     }
                 }
@@ -79,7 +81,11 @@ public class ServerHandler {
     }
 
     public static void startDedicatedServer() {
-
+	    try {
+		    String[] params = { "nogui" };
+		    minecraftServerClass.getMethod("main", String[].class).invoke(null, (Object) params);
+		    new AdminHandler().call();
+	    } catch (Exception ignored) { ignored.printStackTrace(); }
     }
 
     public static String getMinecraftServerClassName() {

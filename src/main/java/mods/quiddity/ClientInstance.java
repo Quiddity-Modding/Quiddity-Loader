@@ -43,7 +43,6 @@ public class ClientInstance implements Runnable, Callable<Void> {
 
     @Override
     public Void call() throws Exception {
-        System.out.println("WOOOOO We're in the client loop");
         return null;
     }
 
