@@ -11,10 +11,18 @@ import java.util.Objects;
 public class ServerHandler {
 
     private final Object minecraftServerObject;
+	private final AdminHandler adminHandlerInstance;
 
     public ServerHandler(Object serverObject) {
         this.minecraftServerObject = serverObject;
         Loader.getInstance().addServerHandler(this);
+	    adminHandlerInstance = new AdminHandler();
+
+	    try {
+		    adminHandlerInstance.call();
+	    } catch (Exception e) {
+		    System.err.println("Unable to start administration server!");
+	    }
     }
 
     @SuppressWarnings("unused") // Suppress unused warning, it get used in injected code
@@ -302,7 +310,6 @@ public class ServerHandler {
 	    try {
 		    String[] params = { "nogui" };
 		    minecraftServerClass.getMethod("main", String[].class).invoke(null, (Object) params);
-		    new AdminHandler().call();
 	    } catch (Exception ignored) { ignored.printStackTrace(); }
     }
 

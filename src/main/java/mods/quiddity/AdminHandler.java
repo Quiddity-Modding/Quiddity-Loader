@@ -95,7 +95,9 @@ public final class AdminHandler implements Callable<Void> {
 	}
 
 	@Override
-	public void finalize() {
+	public void finalize() throws Throwable {
+		super.finalize();
+
 		bossGroup.shutdownGracefully();
 		workerGroup.shutdownGracefully();
 	}
