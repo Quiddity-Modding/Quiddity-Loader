@@ -3,7 +3,6 @@ package mods.quiddity;
 import javassist.*;
 import javassist.bytecode.*;
 import org.apache.commons.lang3.StringUtils;
-import sun.security.krb5.internal.crypto.Des;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;

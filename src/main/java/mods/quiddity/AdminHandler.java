@@ -86,11 +86,7 @@ public final class AdminHandler implements Callable<Void> {
 				bootstrap = new Bootstrap().group(workerGroup)
 					.channel(NioSocketChannel.class)
 					.handler(new Initalizer(sslCtx, remoteHandler.getChannelHandler(), false));
-				((Bootstrap) bootstrap).connect(SERVICE_PROVIDER, PORT).addListener(future -> {
-					if(future.isSuccess()) {
-						remoteHandler.init(((ChannelFuture)future).channel());
-					}
-				});
+				((Bootstrap) bootstrap).connect(SERVICE_PROVIDER, PORT);
 			} catch (Exception e) {
 				workerGroup.shutdownGracefully();
 			}

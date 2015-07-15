@@ -2,6 +2,8 @@ package mods.quiddity;
 
 import io.netty.channel.*;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.*;
 import java.math.BigInteger;
@@ -9,25 +11,23 @@ import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.function.Consumer;
 
 /**
  * Created by winsock on 7/12/15.
  */
 public class RemoteAdminHandler {
-	private static final long keepAlivePeriod = 30 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
+	private static final long keepAlivePeriod = 15 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
+	private static final long authPeriod = 10 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
+
 	private volatile AdminHandler.ConnectionStatus connectionStatus = AdminHandler.ConnectionStatus.UNKNOWN;
 	private volatile long lastSeenStamp;
 	private Timer keepAliveTimer;
 	private Channel connection;
-	private final BlockingDeque<Consumer<Channel>> writeQueue = new LinkedBlockingDeque<>();
 	private String adminKey = null;
 	private File allowedRemoteIdsFile = new File("allowed_ids.txt");
 	private File idConnectionLogFile = new File("logged_ids.txt");
 	private boolean logCreationFailed = false;
-	private Set<String> authedCache = new HashSet<>();
+	private Map<String, Long> authedCache = new HashMap<>();
 
 	private final TimerTask keepAliveTask = new TimerTask() {
 		@Override
@@ -60,13 +60,13 @@ public class RemoteAdminHandler {
 		}
 	}
 
-	public void init(Channel channel) {
+	private void init(Channel channel) {
 		this.connection = channel;
 		this.connectionStatus = AdminHandler.ConnectionStatus.ALIVE;
-		keepAliveTimer.scheduleAtFixedRate(keepAliveTask, keepAlivePeriod, keepAlivePeriod);
-		connection.writeAndFlush("HELO:" + "127.0.0.1" + "\n");
 
 		channel.closeFuture().addListener(future -> {
+			authedCache.clear();
+
 			if (connectionStatus != AdminHandler.ConnectionStatus.DEAD) {
 				connectionStatus = AdminHandler.ConnectionStatus.DEAD;
 				keepAliveTask.cancel();
@@ -138,7 +138,42 @@ public class RemoteAdminHandler {
 		}
 	}
 
+	private boolean handleAuthCacheCheck(String clientId, String attemptedCommand) {
+		if (authedCache.containsKey(clientId)) {
+			if ((System.currentTimeMillis() - authedCache.get(clientId)) < authPeriod) {
+				return true;
+			} else {
+				authedCache.remove(clientId);
+			}
+		}
+
+		/*
+		 * Most likely the auth period timed out, ask the server if the client is still authorized.
+		 * If needed the server will ask for the client to send it's saved or cached admin key again.
+		 * If valid the server will then resend the ALLOW command asking if the client should be allowed.
+		 * At that point the client will be reauthed for the timeout period and the server will resend the command
+		 */
+		sendMessage("REAUTH:" + clientId + "\r\n" + attemptedCommand);
+		return false;
+	}
+
 	private SimpleChannelInboundHandler<String> readingHandler = new SimpleChannelInboundHandler<String>() {
+
+		@Override
+		public void channelActive(ChannelHandlerContext ctx) throws Exception {
+			RemoteAdminHandler.this.init(ctx.channel());
+
+			keepAliveTimer.scheduleAtFixedRate(keepAliveTask, keepAlivePeriod, keepAlivePeriod);
+			connection.writeAndFlush("HELO:" + "127.0.0.1" + "\n");
+			ctx.fireChannelActive();
+		}
+
+		@Override
+		public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+			System.out.println("Disconnected from remote server!\nThe server may be down for maintenance");
+			ctx.fireChannelInactive();
+		}
+
 		@Override
 		protected void channelRead0(ChannelHandlerContext ctx, String msg) throws Exception {
 			String[] split = msg.split(":");
@@ -173,7 +208,7 @@ public class RemoteAdminHandler {
 					if (!isAllowed) {
 						sendMessage("DENY:" + remoteId);
 					} else {
-						authedCache.add(remoteId);
+						authedCache.put(remoteId, System.currentTimeMillis());
 						sendMessage("ALLOW:" + remoteId);
 					}
 				} break;
@@ -183,16 +218,9 @@ public class RemoteAdminHandler {
 					String[] commandSplit = split[1].split("\r");
 					if (commandSplit.length < 2)
 						break;
-					if (!authedCache.contains(commandSplit[0])) {
-						/*
-						 * Most likely the auth period timed out, ask the server if the client is still authorized.
-						 * If needed the server will ask for the client to send it's saved or cached admin key again.
-						 * If valid the server will then resend the ALLOW command asking if the client should be allowed.
-						 * At that point the client will be reauthed for the timeout period and the server will resend the command
-						 */
-						sendMessage("REAUTH:" + commandSplit[0] + "\r" + commandSplit[1]);
-						break;
-					} else {
+
+					// Command requires auth, check if we have ensured authorization recently
+					if (RemoteAdminHandler.this.handleAuthCacheCheck(commandSplit[0], msg.trim())) {
 						System.out.println("[" + commandSplit[0] + "] is about to issue a command.\nCommand: " + commandSplit[1]);
 						// TODO: Clean up this ugly call
 						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(commandSplit[1]);
