@@ -41,13 +41,23 @@ public final class AdminHandler implements Callable<Void> {
 	private static final String PUBLIC_IP_SERVICE = System.getProperty("public-ip-service", "http://checkip.amazonaws.com");
 
 	private final StandaloneAdminHandler handler;
-	private RemoteAdminHandler remoteHandler;
+	private final RemoteAdminHandler remoteHandler;
 
 	private EventLoopGroup bossGroup = new NioEventLoopGroup(1);
 	private EventLoopGroup workerGroup = new NioEventLoopGroup();
 
 	public AdminHandler() {
-		handler = new StandaloneAdminHandler();
+		if (STANDALONE) {
+			handler = new StandaloneAdminHandler();
+			remoteHandler = null;
+		} else {
+			remoteHandler = new RemoteAdminHandler();
+			handler = null;
+		}
+	}
+
+	public RemoteAdminHandler getRemoteHandler() {
+		return remoteHandler;
 	}
 
 	@Override
@@ -73,7 +83,8 @@ public final class AdminHandler implements Callable<Void> {
 					.handler(new LoggingHandler(LogLevel.INFO))
 					.childHandler(new Initalizer(sslCtx, handler, true));
 				bootstrap.bind(PORT).sync().channel().closeFuture().addListener(future -> {
-					// TODO: Implement standalone server cleanup
+					bossGroup.shutdownGracefully();
+					workerGroup.shutdownGracefully();
 				});
 			} catch (Exception e) {
 				bossGroup.shutdownGracefully();
@@ -82,11 +93,13 @@ public final class AdminHandler implements Callable<Void> {
 		} else {
 			sslCtx = SslContext.newClientContext(InsecureTrustManagerFactory.INSTANCE);
 			try {
-				remoteHandler = new RemoteAdminHandler();
 				bootstrap = new Bootstrap().group(workerGroup)
 					.channel(NioSocketChannel.class)
 					.handler(new Initalizer(sslCtx, remoteHandler.getChannelHandler(), false));
-				((Bootstrap) bootstrap).connect(SERVICE_PROVIDER, PORT);
+
+				((Bootstrap) bootstrap).connect(SERVICE_PROVIDER, PORT).sync().channel().closeFuture().addListener(future -> {
+					workerGroup.shutdownGracefully();
+				});
 			} catch (Exception e) {
 				workerGroup.shutdownGracefully();
 			}

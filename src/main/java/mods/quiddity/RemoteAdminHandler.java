@@ -2,8 +2,6 @@ package mods.quiddity;
 
 import io.netty.channel.*;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.*;
 import java.math.BigInteger;
@@ -68,10 +66,13 @@ public class RemoteAdminHandler {
 			authedCache.clear();
 
 			if (connectionStatus != AdminHandler.ConnectionStatus.DEAD) {
-				connectionStatus = AdminHandler.ConnectionStatus.DEAD;
-				keepAliveTask.cancel();
+				stop();
 			}
 		});
+	}
+
+	public AdminHandler.ConnectionStatus getStatus() {
+		return connectionStatus;
 	}
 
 	public ChannelHandler getChannelHandler() {
@@ -80,6 +81,15 @@ public class RemoteAdminHandler {
 
 	public void sendMessage(String message) {
 		connection.writeAndFlush(message + "\n");
+	}
+
+	public void stop() {
+		connectionStatus = AdminHandler.ConnectionStatus.DEAD;
+		keepAliveTimer.cancel();
+		keepAliveTask.cancel();
+		if (connection.isOpen()) {
+			connection.close();
+		}
 	}
 
 	public boolean checkRemoteId(String remoteId) {
@@ -197,7 +207,7 @@ public class RemoteAdminHandler {
 				} break;
 				case "ERR": {
 					connectionStatus = AdminHandler.ConnectionStatus.DEAD;
-					ctx.close();
+					stop();
 				} break;
 				case "ALLOW": {
 					if (split.length < 2)
