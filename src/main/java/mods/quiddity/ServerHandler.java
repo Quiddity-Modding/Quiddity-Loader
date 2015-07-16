@@ -6,7 +6,6 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.Objects;
 
 public class ServerHandler {
 
@@ -32,14 +31,9 @@ public class ServerHandler {
 
 	public void issueCommand(String command) {
 		if (issueCommandMethod != null) {
-			if (minecraftDedicatedServerClass.isAssignableFrom(this.minecraftServerObject.getClass())) {
+			if (minecraftServerClass.isAssignableFrom(this.minecraftServerObject.getClass())) {
 				try {
-					if (issueCommandMethodParamaterTypeNames.length > 2) {
-						Object[] placeholders = new Object[issueCommandMethodParamaterTypeNames.length - 2];
-						issueCommandMethod.invoke(this.minecraftServerObject, command, this.minecraftServerObject, placeholders);
-					} else {
-						issueCommandMethod.invoke(this.minecraftServerObject, command, this.minecraftServerObject);
-					}
+					issueCommandMethod.invoke(this.minecraftServerObject, command, this.minecraftServerObject);
 				} catch (IllegalAccessException | InvocationTargetException e) {
 					System.err.println("Unable to issue minecraft command!");
 				}
@@ -51,234 +45,208 @@ public class ServerHandler {
      * Internal static code for hooking into the client
      */
 
+	private static boolean afterClientServerMerge = false;
+
 	/**
      * Classes
      */
     private static Class<?> minecraftServerClass = null;
-	// Only on dedicated servers
-	private static Class<?> minecraftDedicatedServerClass = null;
-	private static Class<?> serverCommandSenderClass = null;
 
 	/**
 	 * Methods
 	 */
-	private static Method getServerCommandSenderMethod = null;
 	private static Method issueCommandMethod = null;
 
     // TODO: The main server class was always this right?
-    private static final String serverClassName = "net.minecraft.server.MinecraftServer";
-	private static String serverCommandSenderClassName = null;
-	private static String minecraftDedicatedServerClassName = null;
+    private static String serverClassName = "net.minecraft.server.MinecraftServer";
 
 	private static String getServerCommandSenderMethodName = null;
 	private static String initServerMethodName = null;
+
 	private static String issueCommandMethodName = null;
 	private static String[] issueCommandMethodParamaterTypeNames = null;
 
     public static boolean doTransform() {
         CtClass serverClass = Loader.getInstance().getPool().getOrNull(serverClassName);
-	    boolean commandSenderResult = getServerCommandSenderMethod(serverClass);
+	    if (serverClass == null) {
+		    return false;
+	    }
+
+	    if (serverClass.getClassFile().isAbstract()) {
+		    afterClientServerMerge = true;
+	    }
+
+	    try {
+		    if (serverClass.getDeclaredMethod("run") != null) {
+			    CtMethod runMethod = serverClass.getDeclaredMethod("run");
+			    MethodInfo runMethodInfo = runMethod.getMethodInfo();
+			    CodeAttribute ca = runMethodInfo.getCodeAttribute();
+
+                /* Code adapted from StackOverflow Answer
+                 * http://stackoverflow.com/a/2102552
+                 */
+			    for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
+				    int address = ci.next();
+				    int op = ci.byteAt(address);
+				    if (op != Opcode.INVOKESTATIC) {
+					    continue;
+				    }
+
+				    int a1 = ci.s16bitAt(address + 1);
+				    if (serverClass.getClassFile().getConstPool().getMethodrefClassName(a1).equals(Thread.class.getName())
+					    && serverClass.getClassFile().getConstPool().getMethodrefName(a1).equals("sleep")) {
+					    serverClass.addField(CtField.make("private mods.quiddity.ServerHandler quiddityServerHandler = null;", serverClass));
+					    int invokeLine = ((LineNumberAttribute)ca.getAttribute(LineNumberAttribute.tag)).toLineNumber(address);
+					    runMethod.insertAt(invokeLine,
+						    "if (quiddityServerHandler == null) {" +
+							    "quiddityServerHandler = new mods.quiddity.ServerHandler($0);" +
+							    "} quiddityServerHandler.onTick();");
+					    break;
+				    }
+			    }
+		    }
+	    } catch (Exception e) {
+		    System.err.println("Unable to transform the server class.");
+		    e.printStackTrace();
+		    return false;
+	    }
+
 	    boolean issueCommandMethodResult = true;
 	    // Do not run on the client's internal server, I do not beleive they have these classes
 	    if (Loader.getInstance().isDedicatedServer()) {
 		    issueCommandMethodResult = getRunCommandMethod(serverClass);
 	    }
-        try {
-            if (serverClass.getDeclaredMethod("run") != null) {
-                CtMethod runMethod = serverClass.getDeclaredMethod("run");
-                MethodInfo runMethodInfo = runMethod.getMethodInfo();
-                CodeAttribute ca = runMethodInfo.getCodeAttribute();
 
-                /* Code adapted from StackOverflow Answer
-                 * http://stackoverflow.com/a/2102552
-                 */
-                for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
-                    int address = ci.next();
-                    int op = ci.byteAt(address);
-                    if (op != Opcode.INVOKESTATIC) {
-                        continue;
-                    }
-
-                    int a1 = ci.s16bitAt(address + 1);
-                    if (serverClass.getClassFile().getConstPool().getMethodrefClassName(a1).equals(Thread.class.getName())
-                            && serverClass.getClassFile().getConstPool().getMethodrefName(a1).equals("sleep")) {
-                        serverClass.addField(CtField.make("private mods.quiddity.ServerHandler quiddityServerHandler = null;", serverClass));
-                        int invokeLine = ((LineNumberAttribute)ca.getAttribute(LineNumberAttribute.tag)).toLineNumber(address);
-                        runMethod.insertAt(invokeLine,
-                                    "if (quiddityServerHandler == null) {" +
-                                        "quiddityServerHandler = new mods.quiddity.ServerHandler($0);" +
-	                                "} quiddityServerHandler.onTick();");
-                        return commandSenderResult && issueCommandMethodResult;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("Unable to transform the server class.");
-            e.printStackTrace();
-            return false;
-        }
-        return false;
+        return issueCommandMethodResult;
     }
 
-	private static boolean getServerCommandSenderMethod(CtClass serverClass) {
-		for (CtConstructor constructor : serverClass.getDeclaredConstructors()) {
+	private static boolean getRunCommandMethod(CtClass server) {
+		CtMethod initMethod = getInitMethod(server);
+		if (initMethod == null) {
+			return false;
+		}
+		CtClass serverClass = server;
+		if (afterClientServerMerge) {
+			serverClass = getDedicatedServerClass(server);
+			if (serverClass == null) {
+				return false;
+			}
+
 			try {
-				MethodInfo constructorMethodInfo = constructor.getMethodInfo();
-				CodeAttribute ca = constructorMethodInfo.getCodeAttribute();
-
-				/* Code adapted from StackOverflow Answer
-                 * http://stackoverflow.com/a/2102552
-                 */
-
-				boolean foundVirtual = false;
-				String potentialMethodName = "";
-				String potentialTypeName = "";
-
-				for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
-					int address = ci.next();
-					int op = ci.byteAt(address);
-					if (foundVirtual && op == Opcode.PUTFIELD) {
-						getServerCommandSenderMethodName = potentialMethodName;
-						serverCommandSenderClassName = potentialTypeName;
-						return true;
-					}
-
-					if (op != Opcode.INVOKEVIRTUAL) {
-						if (foundVirtual)
-							foundVirtual = false;
-					} else {
-						foundVirtual = !foundVirtual;
-						if (foundVirtual) {
-							int a1 = ci.s16bitAt(address + 1);
-
-							potentialMethodName = serverClass.getClassFile().getConstPool().getMethodrefName(a1);
-							potentialTypeName = serverClass.getClassFile().getConstPool().getMethodrefClassName(a1);
-						}
-					}
-				}
-			} catch (Exception e) {
-				System.err.println("Unable to find server command sender class.");
-				e.printStackTrace();
+				initMethod = serverClass.getMethod(initMethod.getName(), initMethod.getSignature());
+			} catch (NotFoundException e) {
 				return false;
 			}
 		}
-		return false;
-	}
 
-	private static boolean getRunCommandMethod(CtClass serverClass) {
-		CtMethod mainMethod = null;
+		CtClass consoleThread = null;
 		try {
-			mainMethod = serverClass.getDeclaredMethod("main");
-		} catch (NotFoundException ignored) { }
-		if (mainMethod == null) {
-			return false;
-		}
-
-		try {
-			MethodInfo methodInfo = mainMethod.getMethodInfo();
+			MethodInfo methodInfo = initMethod.getMethodInfo();
 			CodeAttribute ca = methodInfo.getCodeAttribute();
-
-			/* Code adapted from StackOverflow Answer
-             * http://stackoverflow.com/a/2102552
-             */
-
-			boolean foundSpecial = false;
-
 			for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
 				int address = ci.next();
 				int op = ci.byteAt(address);
-				if (foundSpecial && op == Opcode.INVOKESPECIAL) {
+				if (op == Opcode.NEW) {
 					int a1 = ci.s16bitAt(address + 1);
-					minecraftDedicatedServerClassName = serverClass.getClassFile().getConstPool().getMethodrefClassName(a1);
-					CtClass dedicatedServerClass = Loader.getInstance().getPool().getOrNull(minecraftDedicatedServerClassName);
-					if (dedicatedServerClass == null) {
-						return false;
+					CtClass testClass = Loader.getInstance().getPool().getOrNull(serverClass.getClassFile().getConstPool().getClassInfo(a1));
+					if (testClass.getSuperclass().getName().equals(Thread.class.getName())) {
+						consoleThread = testClass;
+						break;
 					}
-
-					CtMethod initMethod = getInitMethod(dedicatedServerClass);
-					if (initMethod == null) {
-						return false;
-					}
-
-					for (CtClass innerClass : dedicatedServerClass.getNestedClasses()) {
-						if (innerClass.getEnclosingBehavior() != null && innerClass.getEnclosingBehavior().getSignature().equals(initMethod.getSignature())) {
-							// Took long enough... we found the anonymous Runnable for the console handler
-							MethodInfo innerMethodInfo = innerClass.getDeclaredMethod("run").getMethodInfo();
-							CodeAttribute innerCa = innerMethodInfo.getCodeAttribute();
-
-							for (CodeIterator innerCi = innerCa.iterator(); ci.hasNext(); ) {
-								int innerAddress = innerCi.next();
-								int innerOp = innerCi.byteAt(innerAddress);
-
-								if (innerOp == Opcode.INVOKEVIRTUAL) {
-									int a2 = innerCi.s16bitAt(innerAddress + 1);
-									CtMethod[] possibleIssueMethods = dedicatedServerClass.getDeclaredMethods(innerClass.getClassFile().getConstPool().getMethodrefName(a2));
-									if (possibleIssueMethods == null || possibleIssueMethods.length <= 0)
-										continue;
-									for (CtMethod possibleMethod : possibleIssueMethods) {
-										String descriptor = possibleMethod.getSignature();
-										if (Descriptor.numOfParameters(descriptor) >= 1
-											&& Descriptor.getParameterTypes(descriptor, Loader.getInstance().getPool())[0].getSimpleName().equals(String.class.getSimpleName())) {
-											// OMG We're actually done! We got the method!
-											issueCommandMethodName = possibleMethod.getName();
-											CtClass paramTypes[] = Descriptor.getParameterTypes(descriptor, Loader.getInstance().getPool());
-											issueCommandMethodParamaterTypeNames = new String[paramTypes.length];
-											for (int index = 0; index < paramTypes.length; index++) {
-												issueCommandMethodParamaterTypeNames[index] = paramTypes[index].getName();
-											}
-											return true;
-										}
-									}
-								}
-							}
-						}
-					}
-					break;
-				}
-
-				if (op != Opcode.INVOKESPECIAL) {
-					if (foundSpecial)
-						foundSpecial = false;
-				} else {
-					foundSpecial = true;
 				}
 			}
 		} catch (Exception e) {
-			System.err.println("Error while trying to find the invoke command method.");
+			System.err.println("Error while trying to find the console input thread");
 			e.printStackTrace();
 			return false;
 		}
+		if (consoleThread == null) {
+			return false;
+		}
 
+		try {
+			CtMethod runMethod = consoleThread.getMethod("run", "()V");
+			MethodInfo methodInfo = runMethod.getMethodInfo();
+			CodeAttribute ca = methodInfo.getCodeAttribute();
+			for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
+				int address = ci.next();
+				int op = ci.byteAt(address);
+				if (op == Opcode.INVOKEVIRTUAL) {
+					int a1 = ci.s16bitAt(address + 1);
+					try {
+						CtMethod testMethod = serverClass.getMethod(consoleThread.getClassFile().getConstPool().getMethodrefName(a1), consoleThread.getClassFile().getConstPool().getMethodrefType(a1));
+						if (testMethod.getParameterTypes().length >= 2 && testMethod.getParameterTypes()[0].getName().equals(String.class.getName())) {
+							issueCommandMethodName = testMethod.getName();
+							issueCommandMethodParamaterTypeNames = new String[testMethod.getParameterTypes().length];
+							for (int index = 0; index < testMethod.getParameterTypes().length; index++) {
+								issueCommandMethodParamaterTypeNames[index] = testMethod.getParameterTypes()[index].getName();
+							}
+							return true;
+						}
+					} catch (NotFoundException ignored) { }
+				}
+			}
+		} catch (Exception e) {
+			System.err.println("Error while trying to find the console input thread");
+			e.printStackTrace();
+			return false;
+		}
 		return false;
 	}
 
-	private static CtMethod getInitMethod(CtClass dedicatedServer) {
-		for (CtMethod method : dedicatedServer.getDeclaredMethods()) {
-			try {
-				if (method.getReturnType().isPrimitive() && Descriptor.numOfParameters(method.getMethodInfo().getDescriptor()) <= 0) {
-					CtPrimitiveType returnType = (CtPrimitiveType) method.getReturnType();
-					if (Objects.equals(returnType.getWrapperName(), ((CtPrimitiveType) CtClass.booleanType).getWrapperName())) {
-						MethodInfo methodInfo = method.getMethodInfo();
-						CodeAttribute ca = methodInfo.getCodeAttribute();
+	private static CtClass getDedicatedServerClass(CtClass abstractMinecraft) {
+		if (!afterClientServerMerge) {
+			return null;
+		}
 
-						for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
-							int address = ci.next();
-							int op = ci.byteAt(address);
+		CtMethod mainMethod = null;
+		try {
+			mainMethod = abstractMinecraft.getDeclaredMethod("main");
+		} catch (NotFoundException ignored) { }
+		if (mainMethod == null) {
+			return null;
+		}
+		MethodInfo methodInfo = mainMethod.getMethodInfo();
+		CodeAttribute ca = methodInfo.getCodeAttribute();
 
-							if (op == Opcode.LDC) {
-								int a1 = ci.byteAt(address + 1);
-								String testString = (String)dedicatedServer.getClassFile().getConstPool().getLdcValue(a1);
-								if (testString.equalsIgnoreCase("Server console handler")) {
-									initServerMethodName = testString;
-									return method;
-								}
-							}
-						}
+		try {
+			for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
+				int address = ci.next();
+				int op = ci.byteAt(address);
+				if (op == Opcode.NEW) {
+					int a1 = ci.s16bitAt(address + 1);
+					CtClass testClass = Loader.getInstance().getPool().getOrNull(abstractMinecraft.getClassFile().getConstPool().getClassInfo(a1));
+					if (testClass.subclassOf(abstractMinecraft)) {
+						serverClassName = testClass.getName();
+						return testClass;
 					}
 				}
-			} catch (Exception e) {
-				e.printStackTrace();
 			}
+		} catch (Exception e) {
+			System.err.println("Error while trying to find the dedicated server class.");
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	private static CtMethod getInitMethod(CtClass mainServer) {
+		try {
+			CtMethod runMethod = mainServer.getMethod("run", "()V");
+			MethodInfo methodInfo = runMethod.getMethodInfo();
+			CodeAttribute ca = methodInfo.getCodeAttribute();
+			for (CodeIterator ci = ca.iterator(); ci.hasNext(); ) {
+				int address = ci.next();
+				int op = ci.byteAt(address);
+
+				if (op == (afterClientServerMerge ? Opcode.INVOKEVIRTUAL : Opcode.INVOKESPECIAL)) {
+					int a1 = ci.s16bitAt(address + 1);
+					CtMethod initMethod = mainServer.getMethod(mainServer.getClassFile().getConstPool().getMethodrefName(a1), mainServer.getClassFile().getConstPool().getMethodrefType(a1));
+					initServerMethodName = initMethod.getName();
+					return initMethod;
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
 		}
 		return null;
 	}
@@ -286,17 +254,12 @@ public class ServerHandler {
     public static void transformsDone() {
         try {
             minecraftServerClass = Loader.getInstance().getClassLoader().loadClass(serverClassName);
-	        if (serverCommandSenderClassName != null && getServerCommandSenderMethodName != null) {
-		        serverCommandSenderClass = Loader.getInstance().getClassLoader().loadClass(serverCommandSenderClassName);
-				getServerCommandSenderMethod = serverCommandSenderClass.getDeclaredMethod(getServerCommandSenderMethodName, null);
-	        }
 	        if (Loader.getInstance().isDedicatedServer()) {
-		        minecraftDedicatedServerClass = Loader.getInstance().getClassLoader().loadClass(minecraftDedicatedServerClassName);
-		        Class<?> paramTypes[] = new Class<?>[issueCommandMethodParamaterTypeNames.length];
+		        Class<?>[] paramTypes = new Class<?>[issueCommandMethodParamaterTypeNames.length];
 		        for (int index = 0; index < issueCommandMethodParamaterTypeNames.length; index++) {
 			        paramTypes[index] = Loader.getInstance().getClassLoader().loadClass(issueCommandMethodParamaterTypeNames[index]);
 		        }
-		        issueCommandMethod = minecraftDedicatedServerClass.getDeclaredMethod(issueCommandMethodName, paramTypes);
+		        issueCommandMethod = minecraftServerClass.getDeclaredMethod(issueCommandMethodName, paramTypes);
 	        }
         } catch (ClassNotFoundException e) {
             throw new AssertionError("Unable to load the transformed Minecraft " +
