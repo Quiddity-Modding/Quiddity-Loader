@@ -17,13 +17,19 @@ import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import me.querol.andrew.mcadmin.AdminChannelHandler;
+import me.querol.andrew.mcadmin.RemoteAdminHandler;
+import me.querol.andrew.mcadmin.StandaloneAdminHandler;
 
 import java.io.*;
 import java.net.*;
 import java.nio.charset.Charset;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.logging.Logger;
+import java.util.function.Function;
 
 /**
  * Created by winsock on 7/11/15.
@@ -45,14 +51,95 @@ public final class AdminHandler implements Callable<Void> {
 
 	private EventLoopGroup bossGroup = new NioEventLoopGroup(1);
 	private EventLoopGroup workerGroup = new NioEventLoopGroup();
+	private final ScheduledExecutorService executorService = new ScheduledThreadPoolExecutor(1);
+	private final Function<Void, Void> start;
+	private final Callable<Void> startTask = new Callable<Void>() {
+		@Override
+		public Void call() {
+			start.apply(null);
+			return null;
+		}
+	};
+
+	private final AbstractBootstrap bootstrap;
 
 	public AdminHandler() {
 		if (STANDALONE) {
 			handler = new StandaloneAdminHandler();
 			remoteHandler = null;
+			SslContext sslCtx = null;
+
+			try {
+				File sslCertFile = new File(STANDALONE_SSL_CERT);
+				File sslKeyFile = new File(STANDALONE_SSL_KEY);
+				if (!(sslCertFile.exists() && sslKeyFile.exists())) {
+					SelfSignedCertificate ssc = new SelfSignedCertificate(); // TODO: Switch to real SSL cert
+					sslCtx = SslContext.newServerContext(ssc.certificate(), ssc.privateKey());
+				} else {
+					sslCtx = SslContext.newServerContext(sslCertFile, sslKeyFile);
+				}
+			} catch (Exception e) { e.printStackTrace(); }
+
+			bootstrap = new ServerBootstrap()
+				.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class)
+				.handler(new LoggingHandler(LogLevel.INFO))
+				.childHandler(new Initalizer(sslCtx, handler, true));
+
+			start = Void -> {
+				if (!ServerBootstrap.class.isAssignableFrom(bootstrap.getClass())) {
+					return null;
+				}
+				try {
+					ChannelFuture bindFuture = bootstrap.bind(PORT);
+					bindFuture.awaitUninterruptibly();
+					if (!bindFuture.isSuccess()) {
+						System.err.println("Unable to bind to port: " + PORT);
+						System.err.println("Will retry in 30 seconds!");
+						executorService.schedule(startTask, 30, TimeUnit.SECONDS);
+					} else {
+						bindFuture.sync().channel().closeFuture().addListener(future -> {
+							bossGroup.shutdownGracefully();
+							workerGroup.shutdownGracefully();
+						});
+					}
+				} catch (Exception e) {
+					bossGroup.shutdownGracefully();
+					workerGroup.shutdownGracefully();
+				}
+				return null;
+			};
 		} else {
 			remoteHandler = new RemoteAdminHandler();
 			handler = null;
+			SslContext sslCtx = null;
+			try {
+				sslCtx = SslContext.newClientContext(InsecureTrustManagerFactory.INSTANCE);
+			} catch (Exception e) { e.printStackTrace(); }
+			bootstrap = new Bootstrap().group(workerGroup)
+				.channel(NioSocketChannel.class)
+				.handler(new Initalizer(sslCtx, remoteHandler, false));
+
+			start = Void -> {
+				try {
+					if (!Bootstrap.class.isAssignableFrom(bootstrap.getClass())) {
+						return null;
+					}
+					Bootstrap clientBootstrap = (Bootstrap) bootstrap;
+					ChannelFuture connectFuture = clientBootstrap.connect(SERVICE_PROVIDER, PORT);
+					connectFuture.awaitUninterruptibly();
+					if (!connectFuture.isSuccess()) {
+						System.err.println("Unable to connect to remote relay: " + SERVICE_PROVIDER);
+						System.err.println("Will retry in 30 seconds!");
+						executorService.schedule(startTask, 30, TimeUnit.SECONDS);
+					} else {
+						connectFuture.sync().channel().closeFuture().addListener(future -> workerGroup.shutdownGracefully());
+					}
+
+				} catch (Exception e) {
+					workerGroup.shutdownGracefully();
+				}
+				return null;
+			};
 		}
 	}
 
@@ -62,48 +149,7 @@ public final class AdminHandler implements Callable<Void> {
 
 	@Override
 	public Void call() throws Exception {
-		SslContext sslCtx;
-		AbstractBootstrap<?, ?> bootstrap;
-
-
-		if (STANDALONE) {
-			File sslCertFile = new File(STANDALONE_SSL_CERT);
-			File sslKeyFile = new File(STANDALONE_SSL_KEY);
-
-			if (!(sslCertFile.exists() && sslKeyFile.exists())) {
-				SelfSignedCertificate ssc = new SelfSignedCertificate(); // TODO: Switch to real SSL cert
-				sslCtx = SslContext.newServerContext(ssc.certificate(), ssc.privateKey());
-			} else {
-				sslCtx = SslContext.newServerContext(sslCertFile, sslKeyFile);
-			}
-
-			try {
-				bootstrap = new ServerBootstrap()
-					.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class)
-					.handler(new LoggingHandler(LogLevel.INFO))
-					.childHandler(new Initalizer(sslCtx, handler, true));
-				bootstrap.bind(PORT).sync().channel().closeFuture().addListener(future -> {
-					bossGroup.shutdownGracefully();
-					workerGroup.shutdownGracefully();
-				});
-			} catch (Exception e) {
-				bossGroup.shutdownGracefully();
-				workerGroup.shutdownGracefully();
-			}
-		} else {
-			sslCtx = SslContext.newClientContext(InsecureTrustManagerFactory.INSTANCE);
-			try {
-				bootstrap = new Bootstrap().group(workerGroup)
-					.channel(NioSocketChannel.class)
-					.handler(new Initalizer(sslCtx, remoteHandler.getChannelHandler(), false));
-
-				((Bootstrap) bootstrap).connect(SERVICE_PROVIDER, PORT).sync().channel().closeFuture().addListener(future -> {
-					workerGroup.shutdownGracefully();
-				});
-			} catch (Exception e) {
-				workerGroup.shutdownGracefully();
-			}
-		}
+		executorService.schedule(startTask, 0, TimeUnit.MICROSECONDS);
 		return null;
 	}
 
@@ -132,10 +178,10 @@ public final class AdminHandler implements Callable<Void> {
 
 	private final static class Initalizer extends ChannelInitializer<SocketChannel> {
 		private final SslContext sslContext;
-		private final ChannelHandler logicHandler;
+		private final AdminChannelHandler logicHandler;
 		private final boolean isServer;
 
-		public Initalizer(SslContext context, ChannelHandler logicHandler, boolean server) {
+		private Initalizer(SslContext context, AdminChannelHandler logicHandler, boolean server) {
 			this.sslContext = context;
 			this.logicHandler = logicHandler;
 			this.isServer = server;
@@ -154,7 +200,7 @@ public final class AdminHandler implements Callable<Void> {
 			pipeline.addLast(new DelimiterBasedFrameDecoder(8196, Delimiters.lineDelimiter()));
 			pipeline.addLast(new StringDecoder(Charset.forName("UTF8")));
 			pipeline.addLast(new StringEncoder(Charset.forName("UTF8")));
-			pipeline.addLast(logicHandler);
+			pipeline.addLast(logicHandler.getChannelHandler());
 		}
 	}
 

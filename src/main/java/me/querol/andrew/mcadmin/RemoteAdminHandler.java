@@ -1,8 +1,9 @@
-package mods.quiddity;
+package me.querol.andrew.mcadmin;
 
 import io.netty.channel.*;
+import mods.quiddity.AdminHandler;
+import mods.quiddity.Loader;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.logging.log4j.LogManager;
 
 import java.io.*;
 import java.math.BigInteger;
@@ -14,7 +15,7 @@ import java.util.*;
 /**
  * Created by winsock on 7/12/15.
  */
-public class RemoteAdminHandler {
+public class RemoteAdminHandler implements AdminChannelHandler {
 	private static final long keepAlivePeriod = 15 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
 	private static final long authPeriod = 10 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
 
@@ -56,6 +57,7 @@ public class RemoteAdminHandler {
 
 	public RemoteAdminHandler() {
 		System.setOut(new PrintStream(stdoutCapture));
+		System.setErr(new PrintStream(stdoutCapture));
 
 		lastSeenStamp = System.currentTimeMillis();
 		keepAliveTimer = new Timer("KeepAliveTimer", true);
@@ -89,8 +91,9 @@ public class RemoteAdminHandler {
 		return connectionStatus;
 	}
 
+	@Override
 	public ChannelHandler getChannelHandler() {
-		return readingHandler;
+		return new RemoteReadingHandler();
 	}
 
 	public void sendMessage(String message) {
@@ -150,7 +153,7 @@ public class RemoteAdminHandler {
 			return;
 		}
 
-		FileWriter logWriter = null;
+		FileWriter logWriter;
 		try {
 			logWriter = new FileWriter(idConnectionLogFile);
 			logWriter.write("[" + DateFormat.getDateTimeInstance().format(Date.from(Instant.now())) + "] Remote connection " + (allowed ? "allowed" : "denied") + " for id: " + remoteId);
@@ -181,7 +184,7 @@ public class RemoteAdminHandler {
 		return false;
 	}
 
-	private SimpleChannelInboundHandler<String> readingHandler = new SimpleChannelInboundHandler<String>() {
+	private final class RemoteReadingHandler extends SimpleChannelInboundHandler<String> {
 
 		@Override
 		public void channelActive(ChannelHandlerContext ctx) throws Exception {
@@ -253,5 +256,5 @@ public class RemoteAdminHandler {
 			// The remote relay has contacted us, reset the last seen timestamp
 			lastSeenStamp = System.currentTimeMillis();
 		}
-	};
+	}
 }
