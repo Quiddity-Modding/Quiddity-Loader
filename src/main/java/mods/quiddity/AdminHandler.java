@@ -18,12 +18,12 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.*;
 import java.nio.charset.Charset;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 /**
  * Created by winsock on 7/11/15.
@@ -162,5 +162,43 @@ public final class AdminHandler implements Callable<Void> {
 		ALIVE,
 		UNKNOWN,
 		DEAD
+	}
+
+	public static class CustomOutputStream extends OutputStream {
+		private final OutputStream systemOut = System.out;
+		private final StringBuffer stringBuffer = new StringBuffer();
+		private final Consumer<String> stringConsumer;
+
+		public CustomOutputStream(Consumer<String> onLinePrinted) {
+			stringConsumer = onLinePrinted;
+		}
+
+		@Override
+		public final void write(int b) throws IOException {
+			systemOut.write(b);
+
+			if (b != '\n') {
+				stringBuffer.append((char) b);
+			} else {
+				stringConsumer.accept(stringBuffer.toString());
+				stringBuffer.setLength(0);
+			}
+		}
+
+		@Override
+		public void write(byte[] b, int off, int len) throws IOException {
+			systemOut.write(b, off, len);
+
+			if ((off < 0) || (off > b.length) || (len < 0) ||
+				((off + len) > b.length) || ((off + len) < 0)) {
+				throw new IndexOutOfBoundsException();
+			} else if (len == 0) {
+				return;
+			}
+
+			byte[] pb = new byte[len];
+			System.arraycopy(b, off, pb, 0, len);
+			stringConsumer.accept(new String(pb));
+		}
 	}
 }

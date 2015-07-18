@@ -2,6 +2,7 @@ package mods.quiddity;
 
 import io.netty.channel.*;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.logging.log4j.LogManager;
 
 import java.io.*;
 import java.math.BigInteger;
@@ -26,6 +27,16 @@ public class RemoteAdminHandler {
 	private File idConnectionLogFile = new File("logged_ids.txt");
 	private boolean logCreationFailed = false;
 	private Map<String, Long> authedCache = new HashMap<>();
+	private static final PrintStream realOut = System.out;
+	private final AdminHandler.CustomOutputStream stdoutCapture = new AdminHandler.CustomOutputStream(string -> {
+		if (string.trim().isEmpty())
+			return;
+		if (connectionStatus != AdminHandler.ConnectionStatus.DEAD && connection.isWritable()) {
+			for (String s : string.split("\n")) {
+				sendMessage("CONSOLE:" + s);
+			}
+		}
+	});
 
 	private final TimerTask keepAliveTask = new TimerTask() {
 		@Override
@@ -44,8 +55,11 @@ public class RemoteAdminHandler {
 	};
 
 	public RemoteAdminHandler() {
+		System.setOut(new PrintStream(stdoutCapture));
+
 		lastSeenStamp = System.currentTimeMillis();
 		keepAliveTimer = new Timer("KeepAliveTimer", true);
+		connectionStatus = AdminHandler.ConnectionStatus.DEAD;
 
 		if (!allowedRemoteIdsFile.exists()) {
 			try {
@@ -172,7 +186,6 @@ public class RemoteAdminHandler {
 		@Override
 		public void channelActive(ChannelHandlerContext ctx) throws Exception {
 			RemoteAdminHandler.this.init(ctx.channel());
-
 			keepAliveTimer.scheduleAtFixedRate(keepAliveTask, keepAlivePeriod, keepAlivePeriod);
 			connection.writeAndFlush("HELO:" + "127.0.0.1" + "\n");
 			ctx.fireChannelActive();
@@ -180,7 +193,7 @@ public class RemoteAdminHandler {
 
 		@Override
 		public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-			System.out.println("Disconnected from remote server!\nThe server may be down for maintenance");
+			realOut.println("Disconnected from remote server!\nThe server may be down for maintenance");
 			ctx.fireChannelInactive();
 		}
 
@@ -201,7 +214,7 @@ public class RemoteAdminHandler {
 						adminKey = new BigInteger(1, digest.digest()).toString(16);
 						digest.reset();
 
-						System.out.println("ADMIN_KEY = " + adminKey);
+						realOut.println("ADMIN_KEY = " + adminKey);
 					}
 					sendMessage(adminKey);
 				} break;
@@ -233,7 +246,7 @@ public class RemoteAdminHandler {
 					if (RemoteAdminHandler.this.handleAuthCacheCheck(commandSplit[0], msg.trim())) {
 						System.out.println("[" + commandSplit[0] + "] is about to issue a command.\nCommand: " + commandSplit[1]);
 						// TODO: Clean up this ugly call
-						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(commandSplit[1]);
+						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(commandSplit[1], commandSplit[0]);
 					}
 				} break;
 			}
