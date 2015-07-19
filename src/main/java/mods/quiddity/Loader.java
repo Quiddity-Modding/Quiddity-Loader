@@ -218,7 +218,8 @@ public class Loader {
 		if (args.length <= 0) {
 			// If in IDE set the working directory to minecraft-test-root and put server or client jar into there
 			// Main class is mods.quiddity.Loader
-			System.err.println("Usage: java -jar <jarname> <mcjarpath>\nPlace the loader into the the working directory you want to use for minecraft(server).");
+			System.err.println("Usage: java -jar <jarname> <mcjarpath>");
+			System.err.println("Place the loader into the the working directory you want to use for minecraft(server)");
 			return;
 		}
 		minecraftFile = args[0];

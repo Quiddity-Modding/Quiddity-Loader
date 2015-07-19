@@ -1,7 +1,10 @@
 package me.querol.andrew.mcadmin;
 
+import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
-import mods.quiddity.AdminHandler;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import mods.quiddity.Loader;
 import org.apache.commons.lang3.RandomUtils;
 
@@ -11,15 +14,18 @@ import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Created by winsock on 7/12/15.
  */
-public class RemoteAdminHandler implements AdminChannelHandler {
+public class RemoteAdminHandler extends AdminHandler implements AdminChannelHandler {
 	private static final long keepAlivePeriod = 15 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
 	private static final long authPeriod = 10 /* Minutes */ * 60 /* Seconds */ * 1000 /* Milliseconds */; // Interval time to make sure the connection is alive
 
-	private volatile AdminHandler.ConnectionStatus connectionStatus = AdminHandler.ConnectionStatus.UNKNOWN;
+	private volatile ConnectionStatus connectionStatus = ConnectionStatus.UNKNOWN;
 	private volatile long lastSeenStamp;
 	private Timer keepAliveTimer;
 	private Channel connection;
@@ -29,15 +35,7 @@ public class RemoteAdminHandler implements AdminChannelHandler {
 	private boolean logCreationFailed = false;
 	private Map<String, Long> authedCache = new HashMap<>();
 	private static final PrintStream realOut = System.out;
-	private final AdminHandler.CustomOutputStream stdoutCapture = new AdminHandler.CustomOutputStream(string -> {
-		if (string.trim().isEmpty())
-			return;
-		if (connectionStatus != AdminHandler.ConnectionStatus.DEAD && connection.isWritable()) {
-			for (String s : string.split("\n")) {
-				sendMessage("CONSOLE:" + s);
-			}
-		}
-	});
+	private final Bootstrap bootstrap;
 
 	private final TimerTask keepAliveTask = new TimerTask() {
 		@Override
@@ -56,8 +54,14 @@ public class RemoteAdminHandler implements AdminChannelHandler {
 	};
 
 	public RemoteAdminHandler() {
-		System.setOut(new PrintStream(stdoutCapture));
-		System.setErr(new PrintStream(stdoutCapture));
+		super();
+		SslContext sslCtx = null;
+		try {
+			sslCtx = SslContext.newClientContext(InsecureTrustManagerFactory.INSTANCE);
+		} catch (Exception e) { e.printStackTrace(); }
+		bootstrap = new Bootstrap().group(workerGroup)
+			.channel(NioSocketChannel.class)
+			.handler(new Initalizer(sslCtx, this, false));
 
 		lastSeenStamp = System.currentTimeMillis();
 		keepAliveTimer = new Timer("KeepAliveTimer", true);
@@ -67,11 +71,58 @@ public class RemoteAdminHandler implements AdminChannelHandler {
 			try {
 				allowedRemoteIdsFile.createNewFile();
 			} catch (IOException e) {
-				System.err.println("Error while making new known_ids.txt file after not detecting one present.\n"
-					+ "No one will be able to connect if you have required-confirmation set to true");
-					e.printStackTrace();
+				System.err.println("Error while making new known_ids.txt file after not detecting one present.");
+				System.err.println("No one will be able to connect if you have required-confirmation set to true");
+				e.printStackTrace();
 			}
 		}
+	}
+
+	protected Consumer<String> getOutputConsumer() {
+		return string -> {
+			if (string.trim().isEmpty())
+				return;
+			if (connectionStatus != AdminHandler.ConnectionStatus.DEAD && connection.isWritable()) {
+				for (String s : string.split("\n")) {
+					sendMessage("CONSOLE:" + s);
+				}
+			}
+		};
+	}
+
+	@Override
+	protected Function<Void, Void> getStart() {
+		return Void -> {
+			try {
+				if (!Bootstrap.class.isAssignableFrom(bootstrap.getClass())) {
+					return null;
+				}
+				Bootstrap clientBootstrap = (Bootstrap) bootstrap;
+				ChannelFuture connectFuture = clientBootstrap.connect(SERVICE_PROVIDER, PORT);
+				connectFuture.awaitUninterruptibly();
+				if (!connectFuture.isSuccess()) {
+					System.err.println("Unable to connect to remote relay: " + SERVICE_PROVIDER);
+					System.err.println("Will retry in 30 seconds!");
+					executorService.schedule(startTask, 30, TimeUnit.SECONDS);
+				} else {
+					connectFuture.sync().channel().closeFuture().addListener(future -> workerGroup.shutdownGracefully());
+				}
+
+			} catch (Exception e) {
+				workerGroup.shutdownGracefully();
+			}
+			return null;
+		};
+	}
+
+	@Override
+	public Bootstrap getBootstrap() {
+		return bootstrap;
+	}
+
+	@Override
+	protected AdminChannelHandler getHandler() {
+		return this;
 	}
 
 	private void init(Channel channel) {
@@ -146,8 +197,8 @@ public class RemoteAdminHandler implements AdminChannelHandler {
 				}
 			}
 		} catch (IOException e) {
-			System.err.println("Error while making new logged_ids.txt file after not detecting one present or rotating logs.\n"
-				+ "No connection attemps will be logged to file, only console.");
+			System.err.println("Error while making new logged_ids.txt file after not detecting one present or rotating logs.");
+			System.err.println("No connection attemps will be logged to file, only console.");
 			e.printStackTrace();
 			logCreationFailed = true;
 			return;

@@ -2,13 +2,24 @@ package mods.quiddity;
 
 import javassist.*;
 import javassist.bytecode.*;
+import me.querol.andrew.mcadmin.AdminHandler;
+import me.querol.andrew.mcadmin.RemoteAdminHandler;
+import me.querol.andrew.mcadmin.StandaloneAdminHandler;
 import org.apache.commons.lang3.StringUtils;
 
 import java.lang.reflect.*;
 
 public class ServerHandler {
 	private final Object minecraftServerObject;
-	private static final AdminHandler adminHandlerInstance = new AdminHandler();
+	private static final AdminHandler adminHandlerInstance;
+
+	static {
+		if (AdminHandler.STANDALONE) {
+			adminHandlerInstance = new StandaloneAdminHandler();
+		} else {
+			adminHandlerInstance = new RemoteAdminHandler();
+		}
+	}
 
 	public ServerHandler(Object serverObject) {
 		this.minecraftServerObject = serverObject;
