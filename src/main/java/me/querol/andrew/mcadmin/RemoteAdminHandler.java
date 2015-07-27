@@ -10,10 +10,13 @@ import org.apache.commons.lang3.RandomUtils;
 
 import java.io.*;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -36,6 +39,8 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 	private Map<String, Long> authedCache = new HashMap<>();
 	private static final PrintStream realOut = System.out;
 	private final Bootstrap bootstrap;
+	private LinkedBlockingDeque<String> messageStack = new LinkedBlockingDeque<>();
+	private Thread messageWorkerThread;
 
 	private final TimerTask keepAliveTask = new TimerTask() {
 		@Override
@@ -50,6 +55,21 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 				connectionStatus = AdminHandler.ConnectionStatus.UNKNOWN; // We haven't heard from the server in 30 minutes
 				connection.writeAndFlush("PING\n");
 			}
+		}
+	};
+
+	private final Runnable messageQueueWorker = new Runnable() {
+		@Override
+		public void run() {
+			while (connectionStatus != ConnectionStatus.DEAD) {
+				try {
+					String message = messageStack.takeFirst();
+					connection.writeAndFlush(message + "\n");
+				} catch (InterruptedException e) {
+					return;
+				}
+			}
+
 		}
 	};
 
@@ -84,7 +104,10 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 				return;
 			if (connectionStatus != AdminHandler.ConnectionStatus.DEAD && connection.isWritable()) {
 				for (String s : string.split("\n")) {
-					sendMessage("CONSOLE:" + s);
+					if (s.trim().isEmpty()) {
+						continue;
+					}
+					sendMessage("CONSOLE:" + Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8)));
 				}
 			}
 		};
@@ -128,6 +151,8 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 	private void init(Channel channel) {
 		this.connection = channel;
 		this.connectionStatus = AdminHandler.ConnectionStatus.ALIVE;
+		this.messageWorkerThread = new Thread(messageQueueWorker, "Send Queue Worker");
+		this.messageWorkerThread.start();
 
 		channel.closeFuture().addListener(future -> {
 			authedCache.clear();
@@ -148,7 +173,7 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 	}
 
 	public void sendMessage(String message) {
-		connection.writeAndFlush(message + "\n");
+		messageStack.push(message);
 	}
 
 	public void stop() {
@@ -298,9 +323,11 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 
 					// Command requires auth, check if we have ensured authorization recently
 					if (RemoteAdminHandler.this.handleAuthCacheCheck(commandSplit[0], msg.trim())) {
-						System.out.println("[" + commandSplit[0] + "] is about to issue a command.\nCommand: " + commandSplit[1]);
+						String decoded = new String(Base64.getDecoder().decode(commandSplit[1].getBytes(StandardCharsets.UTF_8)));
+						System.out.println("[" + commandSplit[0] + "] is about to issue a command.\nCommand: " + decoded);
+
 						// TODO: Clean up this ugly call
-						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(commandSplit[1], commandSplit[0]);
+						Loader.getInstance().getServerHandlers().keySet().iterator().next().issueCommand(decoded, commandSplit[0]);
 					}
 				} break;
 			}

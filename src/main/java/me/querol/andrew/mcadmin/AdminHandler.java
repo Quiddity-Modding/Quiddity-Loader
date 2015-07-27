@@ -12,7 +12,7 @@ import io.netty.handler.ssl.SslContext;
 
 import java.io.*;
 import java.net.*;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -106,8 +106,8 @@ public abstract class AdminHandler implements Callable<Void> {
 			}
 
 			pipeline.addLast(new DelimiterBasedFrameDecoder(8196, Delimiters.lineDelimiter()));
-			pipeline.addLast(new StringDecoder(Charset.forName("UTF8")));
-			pipeline.addLast(new StringEncoder(Charset.forName("UTF8")));
+			pipeline.addLast(new StringDecoder(StandardCharsets.UTF_8));
+			pipeline.addLast(new StringEncoder(StandardCharsets.UTF_8));
 			pipeline.addLast(logicHandler.getChannelHandler());
 		}
 	}
