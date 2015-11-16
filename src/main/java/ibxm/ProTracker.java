@@ -5,10 +5,7 @@ import java.io.*;
 public class ProTracker {
 	public static boolean is_mod( byte[] header_1084_bytes ) {
 		boolean is_mod;
-		is_mod = false;
-		if( calculate_num_channels( header_1084_bytes ) > 0 ) {
-			is_mod = true;
-		}
+		is_mod = calculate_num_channels(header_1084_bytes) > 0;
 		return is_mod;
 	}
 

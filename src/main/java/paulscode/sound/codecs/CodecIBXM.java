@@ -298,7 +298,7 @@ public class CodecIBXM implements ICodec
             return null;
         }
 
-        int bufferFrameSize = (int) SoundSystemConfig.getStreamingBufferSize()
+        int bufferFrameSize = SoundSystemConfig.getStreamingBufferSize()
                                     / 4;
 
         int frames = songDuration - playPosition;
@@ -353,7 +353,7 @@ public class CodecIBXM implements ICodec
             return null;
         }
 
-        int bufferFrameSize = (int) SoundSystemConfig.getFileChunkSize()
+        int bufferFrameSize = SoundSystemConfig.getFileChunkSize()
                                     / 4;
 
 		byte[] outputBuffer = new byte[ bufferFrameSize * 4 ];

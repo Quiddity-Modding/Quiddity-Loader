@@ -47,6 +47,7 @@ public class StandaloneAdminHandler extends AdminHandler implements AdminChannel
 			.childHandler(new Initalizer(sslCtx, this, true));
 	}
 
+	@Override
 	protected Consumer<String> getOutputConsumer() {
 		return string -> { };
 	}

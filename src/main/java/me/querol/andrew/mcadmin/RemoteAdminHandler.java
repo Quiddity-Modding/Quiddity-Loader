@@ -98,6 +98,7 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 		}
 	}
 
+	@Override
 	protected Consumer<String> getOutputConsumer() {
 		return string -> {
 			if (string.trim().isEmpty())
@@ -120,7 +121,7 @@ public class RemoteAdminHandler extends AdminHandler implements AdminChannelHand
 				if (!Bootstrap.class.isAssignableFrom(bootstrap.getClass())) {
 					return null;
 				}
-				Bootstrap clientBootstrap = (Bootstrap) bootstrap;
+				Bootstrap clientBootstrap = bootstrap;
 				ChannelFuture connectFuture = clientBootstrap.connect(SERVICE_PROVIDER, PORT);
 				connectFuture.awaitUninterruptibly();
 				if (!connectFuture.isSuccess()) {

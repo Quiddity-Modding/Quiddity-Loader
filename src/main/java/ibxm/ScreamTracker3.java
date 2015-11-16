@@ -77,10 +77,7 @@ public class ScreamTracker3 {
 		if( ( flags & 0x40 ) == 0x40 || tracker_version == 0x1300 ) {
 			module.fast_volume_slides = true;
 		}
-		signed_samples = false;
-		if( unsigned_short_le( s3m_file, 42 ) == 0x01 ) {
-			signed_samples = true;
-		}
+		signed_samples = unsigned_short_le(s3m_file, 42) == 0x01;
 		module.global_volume = s3m_file[ 48 ] & 0xFF;
 		module.default_speed = s3m_file[ 49 ] & 0xFF;
 		module.default_tempo = s3m_file[ 50 ] & 0xFF;
